@@ -116,7 +116,7 @@ if [ "$SERVER_ROLE" == "1" ]; then
         sndwnd: 2048
         rcvwnd: 2048
         mtu: 1300
-    EOF
+EOF
 
     # Service
     cat <<EOF > /etc/systemd/system/paqet.service
@@ -174,7 +174,7 @@ if [ "$SERVER_ROLE" == "2" ]; then
         LOCAL_IP_IR=$(curl -s ifconfig.me)
 
         cat <<EOF > /etc/paqet/config.yaml
-    role: "client"
+role: "client"
     log: { level: "error" }
     socks5:
       - listen: "127.0.0.1:1080"
@@ -191,7 +191,7 @@ if [ "$SERVER_ROLE" == "2" ]; then
         sndwnd: 2048
         rcvwnd: 2048
         mtu: 1300
-    EOF
+EOF
 
     # --- Create Network Setup Script ---
     LOCAL_PUB_IP=$(curl -s ifconfig.me)
