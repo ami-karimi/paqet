@@ -100,22 +100,29 @@ if [ "$SERVER_ROLE" == "1" ]; then
         DETECTED_MAC=$(ip neigh show $GW_IP | awk '{print $5}')
         INTERFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
 
-        cat <<EOF > /etc/paqet/config.yaml
-    role: "server"
-    log: { level: "error" }
-    listen: { addr: ":$P_PORT" }
-    network:
-      interface: "$INTERFACE"
-      ipv4: { addr: "$LOCAL_PUB_IP:$P_PORT", router_mac: "$DETECTED_MAC" }
-    transport:
-      protocol: "kcp"
-      kcp:
-        block: "aes"
-        key: "$P_KEY"
-        mode: "fast3"
-        sndwnd: 2048
-        rcvwnd: 2048
-        mtu: 1300
+# Get Gateway MAC automatically if not provided
+    GW_IP=$(ip route | grep default | awk '{print $3}' | head -n1)
+    # Ping to ensure ARP table is populated
+    ping -c 1 $GW_IP > /dev/null 2>&1
+    DETECTED_MAC=$(ip neigh show $GW_IP | awk '{print $5}')
+    INTERFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
+
+    cat <<EOF > /etc/paqet/config.yaml
+role: "server"
+log: { level: "error" }
+listen: { addr: ":$P_PORT" }
+network:
+  interface: "$INTERFACE"
+  ipv4: { addr: "$LOCAL_PUB_IP:$P_PORT", router_mac: "$DETECTED_MAC" }
+transport:
+  protocol: "kcp"
+  kcp:
+    block: "aes"
+    key: "$P_KEY"
+    mode: "fast3"
+    sndwnd: 2048
+    rcvwnd: 2048
+    mtu: 1300
 EOF
 
     # Service
@@ -166,31 +173,31 @@ if [ "$SERVER_ROLE" == "2" ]; then
     rm tun2socks.zip
 
     # --- Config Paqet Client ---
-    # --- Auto-detect Iran Network Info ---
-        GW_IP_IR=$(ip route | grep default | awk '{print $3}' | head -n1)
-        ping -c 1 $GW_IP_IR > /dev/null 2>&1
-        GW_MAC_IR=$(ip neigh show $GW_IP_IR | awk '{print $5}')
-        IFACE_IR=$(ip route | grep default | awk '{print $5}' | head -n1)
-        LOCAL_IP_IR=$(curl -s ifconfig.me)
+# --- Auto-detect Iran Network Info ---
+    GW_IP_IR=$(ip route | grep default | awk '{print $3}' | head -n1)
+    ping -c 1 $GW_IP_IR > /dev/null 2>&1
+    GW_MAC_IR=$(ip neigh show $GW_IP_IR | awk '{print $5}')
+    IFACE_IR=$(ip route | grep default | awk '{print $5}' | head -n1)
+    LOCAL_IP_IR=$(curl -s ifconfig.me)
 
-        cat <<EOF > /etc/paqet/config.yaml
+    cat <<EOF > /etc/paqet/config.yaml
 role: "client"
-    log: { level: "error" }
-    socks5:
-      - listen: "127.0.0.1:1080"
-    network:
-      interface: "$IFACE_IR"
-      ipv4: { addr: "$LOCAL_IP_IR:0", router_mac: "$GW_MAC_IR" }
-    server: { addr: "$REMOTE_IP:$REMOTE_PORT" }
-    transport:
-      protocol: "kcp"
-      kcp:
-        block: "aes"
-        key: "$P_KEY"
-        mode: "fast3"
-        sndwnd: 2048
-        rcvwnd: 2048
-        mtu: 1300
+log: { level: "error" }
+socks5:
+  - listen: "127.0.0.1:1080"
+network:
+  interface: "$IFACE_IR"
+  ipv4: { addr: "$LOCAL_IP_IR:0", router_mac: "$GW_MAC_IR" }
+server: { addr: "$REMOTE_IP:$REMOTE_PORT" }
+transport:
+  protocol: "kcp"
+  kcp:
+    block: "aes"
+    key: "$P_KEY"
+    mode: "fast3"
+    sndwnd: 2048
+    rcvwnd: 2048
+    mtu: 1300
 EOF
 
     # --- Create Network Setup Script ---
