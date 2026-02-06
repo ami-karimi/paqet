@@ -1,97 +1,146 @@
 #!/bin/bash
 
-# تنظیم دقیق ورژن طبق لینک شما
-VERSION="v1.0.0-alpha.14"
+# ==========================================
+#  Paqet Auto-Installer (Robust Extraction)
+#  Version: v1.0.0-alpha.14
+# ==========================================
 
 # رنگ‌ها
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
-if [ "$EUID" -ne 0 ]; then echo "لطفاً با sudo اجرا کنید"; exit 1; fi
+# بررسی دسترسی روت
+if [ "$EUID" -ne 0 ]; then
+  echo -e "${RED}لطفاً با دسترسی root (sudo) اجرا کنید.${NC}"
+  exit 1
+fi
 
-# ۱. تشخیص معماری (تبدیل x86_64 به amd64)
+echo -e "${CYAN}#################################################${NC}"
+echo -e "${CYAN}#        نصب‌کننده هوشمند تانل Paqet            #${NC}"
+echo -e "${CYAN}#################################################${NC}"
+
+# -----------------------------------------------
+# ۱. تشخیص معماری سیستم
+# -----------------------------------------------
 ARCH=$(uname -m)
 if [[ "$ARCH" == "x86_64" ]]; then
     PAQET_ARCH="amd64"
 elif [[ "$ARCH" == "aarch64" ]]; then
     PAQET_ARCH="arm64"
 else
-    echo "معماری پشتیبانی نمی‌شود"
+    echo -e "${RED}معماری $ARCH پشتیبانی نمی‌شود.${NC}"
     exit 1
 fi
 
-# ۲. ساخت دقیق اسم فایل طبق الگوی لینک شما
-# فرمت: paqet-linux-amd64-v1.0.0-alpha.14.tar.gz
+# -----------------------------------------------
+# ۲. نصب پیش‌نیازها
+# -----------------------------------------------
+echo -e "${GREEN}[+] در حال نصب ابزارهای مورد نیاز...${NC}"
+apt-get update -qq
+apt-get install -y libpcap-dev iptables iptables-persistent net-tools curl wget tar -qq
+
+# -----------------------------------------------
+# ۳. دانلود و نصب (منطق اصلاح شده)
+# -----------------------------------------------
+VERSION="v1.0.0-alpha.14"
 FILE_NAME="paqet-linux-${PAQET_ARCH}-${VERSION}.tar.gz"
 DOWNLOAD_URL="https://github.com/hanselime/paqet/releases/download/${VERSION}/${FILE_NAME}"
-TARGET_BIN="/usr/local/bin/paqet"
+INSTALL_PATH="/usr/local/bin/paqet"
+TEMP_DIR="/tmp/paqet_install"
 
-echo -e "${YELLOW}[*] لینک دقیق دانلود: ${DOWNLOAD_URL}${NC}"
+echo -e "${YELLOW}[*] در حال دانلود نسخه ${VERSION}...${NC}"
 
-# ۳. دانلود و نصب
-apt-get update -qq && apt-get install -y libpcap-dev iptables-persistent wget tar -qq
-
+# آماده‌سازی محیط تمیز
 systemctl stop paqet 2>/dev/null
+rm -rf $TEMP_DIR
+mkdir -p $TEMP_DIR
 rm -f /tmp/paqet.tar.gz
-rm -f $TARGET_BIN
 
-echo -e "${GREEN}[+] در حال دانلود...${NC}"
-wget -O /tmp/paqet.tar.gz "$DOWNLOAD_URL"
+# دانلود
+wget -q --show-progress -O /tmp/paqet.tar.gz "$DOWNLOAD_URL"
 
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}[+] دانلود شد. در حال اکسترکت...${NC}"
-    # اکسترکت در پوشه tmp
-    tar -xzf /tmp/paqet.tar.gz -C /tmp/
-
-    # پیدا کردن فایل اجرایی (چون ممکن است داخل یک پوشه باشد یا اسمش فرق کند)
-    # ما دنبال فایلی می‌گردیم که اسمش paqet باشد یا شبیه آن
-    FIND_PATH=$(find /tmp -type f -name "paqet" | head -n 1)
-
-    # اگر پیدا نشد، شاید اسمش paqet-linux-amd64... باشد
-    if [ -z "$FIND_PATH" ]; then
-        FIND_PATH=$(find /tmp -name "paqet-linux-*" -type f | head -n 1)
-    fi
-
-    if [ -n "$FIND_PATH" ]; then
-        mv "$FIND_PATH" $TARGET_BIN
-        chmod +x $TARGET_BIN
-        echo -e "${GREEN}[✓] نصب موفقیت‌آمیز بود.${NC}"
-    else
-        echo -e "${RED}[!] فایل اکسترکت شد اما باینری پیدا نشد. محتویات /tmp را چک کنید.${NC}"
-        ls -R /tmp
-        exit 1
-    fi
-else
-    echo -e "${RED}[FATAL] دانلود انجام نشد. لینک یا شبکه را بررسی کنید.${NC}"
+if [ $? -ne 0 ]; then
+    echo -e "${RED}[FATAL] دانلود فایل شکست خورد. اینترنت سرور را بررسی کنید.${NC}"
     exit 1
 fi
 
-# ۴. ادامه تنظیمات (کانفیگ و سرویس)
+echo -e "${GREEN}[+] دانلود شد. در حال اکسترکت و جستجوی فایل باینری...${NC}"
+tar -xzf /tmp/paqet.tar.gz -C $TEMP_DIR
+
+# پیدا کردن فایل اجرایی (بزرگترین فایل در پوشه اکسترکت شده)
+# این روش تضمینی است چون فایل باینری همیشه حجمش از فایل‌های متنی بیشتر است
+BINARY_FOUND=$(find $TEMP_DIR -type f -size +1M | head -n 1)
+
+if [ -n "$BINARY_FOUND" ]; then
+    echo -e "${GREEN}[✓] فایل اصلی پیدا شد: $BINARY_FOUND${NC}"
+    cp "$BINARY_FOUND" $INSTALL_PATH
+    chmod +x $INSTALL_PATH
+else
+    echo -e "${RED}[FATAL] فایل باینری در آرشیو پیدا نشد! محتویات:${NC}"
+    ls -R $TEMP_DIR
+    exit 1
+fi
+
+# پاکسازی
+rm -rf $TEMP_DIR /tmp/paqet.tar.gz
+
+# -----------------------------------------------
+# ۴. دریافت اطلاعات شبکه
+# -----------------------------------------------
 IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
 GW_IP=$(ip route | grep default | awk '{print $3}' | head -n1)
+# پینگ برای پر کردن جدول ARP
+ping -c 1 $GW_IP > /dev/null 2>&1
 GW_MAC=$(ip neigh show $GW_IP | awk '{print $5}')
 LOCAL_IP=$(curl -s ifconfig.me)
 
-echo "-------------------------------------------------"
-read -p "نقش سرور (1: خارج، 2: ایران): " CHOICE
+if [ -z "$GW_MAC" ]; then
+    echo -e "${RED}هشدار: مک آدرس گیت‌وی پیدا نشد. لطفاً دستی وارد کنید.${NC}"
+    read -p "Gateway MAC: " GW_MAC
+fi
+
+# -----------------------------------------------
+# ۵. پیکربندی توسط کاربر
+# -----------------------------------------------
+echo -e "${CYAN}-------------------------------------------------${NC}"
+echo "نقش این سرور را انتخاب کنید:"
+echo "1) سرور خارج (Server Mode)"
+echo "2) سرور ایران (Client Mode - متصل به میکروتیک)"
+read -p "انتخاب (1 یا 2): " ROLE_CHOICE
+
 read -p "پورت تانل Paqet (پیش‌فرض 9999): " P_PORT
 P_PORT=${P_PORT:-9999}
-read -p "رمز عبور تانل: " P_KEY
 
-# فایروال (بسیار مهم)
-iptables -t raw -F
+read -p "رمز عبور تانل (یکسان در هر دو سرور): " P_KEY
+if [ -z "$P_KEY" ]; then echo "رمز نمی‌تواند خالی باشد"; exit 1; fi
+
+# -----------------------------------------------
+# ۶. تنظیمات فایروال (Raw Socket Bypass)
+# -----------------------------------------------
+echo -e "${GREEN}[+] اعمال تنظیمات خاص فایروال...${NC}"
+# حذف رول‌های تکراری
+iptables -t raw -D PREROUTING -p tcp --dport $P_PORT -j NOTRACK 2>/dev/null
+iptables -t raw -D OUTPUT -p tcp --sport $P_PORT -j NOTRACK 2>/dev/null
+iptables -t mangle -D OUTPUT -p tcp --sport $P_PORT --tcp-flags RST RST -j DROP 2>/dev/null
+
+# اعمال رول‌ها
 iptables -t raw -A PREROUTING -p tcp --dport $P_PORT -j NOTRACK
 iptables -t raw -A OUTPUT -p tcp --sport $P_PORT -j NOTRACK
 iptables -t mangle -A OUTPUT -p tcp --sport $P_PORT --tcp-flags RST RST -j DROP
+
 netfilter-persistent save > /dev/null 2>&1
 
+# -----------------------------------------------
+# ۷. ساخت فایل کانفیگ
+# -----------------------------------------------
 mkdir -p /etc/paqet
 CONF="/etc/paqet/config.yaml"
 
-if [ "$CHOICE" == "1" ]; then
-    # Server Mode
+if [ "$ROLE_CHOICE" == "1" ]; then
+    # --- SERVER CONFIG ---
     cat <<EOF > $CONF
 role: "server"
 log: { level: "info" }
@@ -103,14 +152,19 @@ transport:
   protocol: "kcp"
   kcp: { block: "aes", key: "$P_KEY" }
 EOF
+
 else
-    # Client Mode (Iran)
-    read -p "آی‌پی سرور خارج: " REMOTE_IP
+    # --- CLIENT CONFIG ---
+    read -p "آی‌پی سرور خارج را وارد کنید: " REMOTE_IP
+
+    # فعال‌سازی IP Forwarding
     echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-paqet.conf
     sysctl -p /etc/sysctl.d/99-paqet.conf > /dev/null
+
     cat <<EOF > $CONF
 role: "client"
 log: { level: "info" }
+# فوروارد کردن پورت GRE (4789 UDP) به سمت سرور خارج
 forward:
   - { listen: "0.0.0.0:4789", target: "127.0.0.1:4789", protocol: "udp" }
 network:
@@ -123,18 +177,39 @@ transport:
 EOF
 fi
 
-# سرویس
+# -----------------------------------------------
+# ۸. ساخت و اجرای سرویس
+# -----------------------------------------------
 cat <<EOF > /etc/systemd/system/paqet.service
 [Unit]
-Description=Paqet Tunnel
+Description=Paqet Tunnel Service
 After=network.target
+
 [Service]
-ExecStart=$TARGET_BIN run -c $CONF
+Type=simple
+User=root
+ExecStart=$INSTALL_PATH run -c $CONF
 Restart=always
 RestartSec=3
+
 [Install]
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload && systemctl enable paqet && systemctl restart paqet
-echo -e "${GREEN}✓ تمام شد! وضعیت سرویس: systemctl status paqet${NC}"
+systemctl daemon-reload
+systemctl enable paqet
+systemctl restart paqet
+
+echo -e "${CYAN}-------------------------------------------------${NC}"
+if systemctl is-active --quiet paqet; then
+    echo -e "${GREEN}✓ تانل با موفقیت نصب و اجرا شد!${NC}"
+    if [ "$ROLE_CHOICE" == "2" ]; then
+        echo -e "${YELLOW}نکته برای میکروتیک:${NC}"
+        echo -e "در تنظیمات GRE میکروتیک:"
+        echo -e "Remote Address = $LOCAL_IP (آی‌پی همین سرور ایران)"
+        echo -e "Tunnel Port = 4789"
+    fi
+else
+    echo -e "${RED}خطا: سرویس اجرا نشد. خروجی زیر را بررسی کنید:${NC}"
+    journalctl -u paqet -n 20 --no-pager
+fi
