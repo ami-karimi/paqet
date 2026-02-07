@@ -1,41 +1,58 @@
 #!/bin/bash
-# AmneziaWG + GRE Fully Automated Installer
 
+# --- Colors ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
-# --- Function to get Local Interface IP ---
-get_local_ip() {
-    local_ip=$(ip -4 addr show $(ip route | grep default | awk '{print $5}' | head -n1) | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n1)
-    echo "$local_ip"
-}
+# --- Check Root ---
+if [ "$EUID" -ne 0 ]; then
+  echo -e "${RED}Please run as root (sudo).${NC}"
+  exit 1
+fi
 
-LOCAL_IP_INTERFACE=$(get_local_ip)
+# --- 1. Install AmneziaWG if missing ---
+if ! command -v awg &> /dev/null; then
+    echo -e "${YELLOW}[!] AmneziaWG not found. Installing...${NC}"
+    add-apt-repository ppa:amnezia/ppa -y
+    apt-get update
+    apt-get install -y amneziawg iptables iproute2
+fi
 
-echo -e "${BLUE}Detected Local IP: ${YELLOW}$LOCAL_IP_INTERFACE${NC}"
-echo -e "${BLUE}Select Role:${NC}"
-echo "1) Foreign Server (Server Mode)"
-echo "2) Iran Server (Bridge Mode)"
-read -p "Choice: " ROLE
-
-# --- Auto Key Generation ---
+# --- 2. Auto Key Generation (Robust Method) ---
 mkdir -p /etc/amnezia
 if [ ! -f /etc/amnezia/privatekey ]; then
-    awg genkey | tee /etc/amnezia/privatekey | awg pubkey > /etc/amnezia/publickey
+    echo -e "${BLUE}[*] Generating Secure Keys...${NC}"
+    # Creating keys using the tool directly
+    awg genkey > /etc/amnezia/privatekey
+    cat /etc/amnezia/privatekey | awg pubkey > /etc/amnezia/publickey
     chmod 600 /etc/amnezia/privatekey
 fi
 
 PRIV_KEY=$(cat /etc/amnezia/privatekey)
 PUB_KEY=$(cat /etc/amnezia/publickey)
 
+# --- 3. Interface IP Detection ---
+INTERFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
+LOCAL_IP_INTERFACE=$(ip -4 addr show $INTERFACE | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n1)
+
+echo -e "${GREEN}Detected IP:${NC} $LOCAL_IP_INTERFACE on $INTERFACE"
+echo -e "${GREEN}Your Public Key:${NC} $PUB_KEY"
+echo -e "${YELLOW}-----------------------------------------${NC}"
+
+# --- 4. Role Selection ---
+echo -e "Which server is this?"
+echo "1) Foreign Server (Germany/etc)"
+echo "2) Iran Server (Bridge)"
+read -p "Selection [1-2]: " ROLE
+
 if [ "$ROLE" == "1" ]; then
-    # --- FOREIGN SERVER ---
+    # --- FOREIGN CONFIG ---
     read -p "Enter Port (Default 51820): " WG_PORT
     WG_PORT=${WG_PORT:-51820}
-    read -p "Enter Iran Server Public Key: " IRAN_PUB_KEY
+    read -p "Enter Iran Public Key: " REMOTE_PUB
 
     cat <<EOF > /etc/amnezia/awg0.conf
 [Interface]
@@ -51,28 +68,23 @@ UnderloadPacketMagicHeader = 0x090a0b0c
 TransportPacketMagicHeader = 0x0d0e0f10
 
 [Peer]
-PublicKey = $IRAN_PUB_KEY
+PublicKey = $REMOTE_PUB
 AllowedIPs = 10.0.0.2/32, 172.16.1.0/30
 EOF
 
     systemctl enable awg-quick@awg0
     systemctl restart awg-quick@awg0
-
-    echo -e "${GREEN}==============================================${NC}"
-    echo -e "Foreign Server is UP!"
-    echo -e "Your Public Key: ${YELLOW}$PUB_KEY${NC}"
-    echo -e "Port: ${YELLOW}$WG_PORT${NC}"
-    echo -e "${GREEN}==============================================${NC}"
+    echo -e "${GREEN}SUCCESS: Foreign Server is Up!${NC}"
 
 else
-    # --- IRAN SERVER ---
-    read -p "Foreign Server Public IP: " FOREIGN_IP
-    read -p "Foreign Server Port (Default 51820): " FOREIGN_PORT
-    FOREIGN_PORT=${FOREIGN_PORT:-51820}
-    read -p "Foreign Server Public Key: " FOREIGN_PUB_KEY
+    # --- IRAN CONFIG ---
+    read -p "Foreign Server Public IP: " F_IP
+    read -p "Foreign Server Port (51820): " F_PORT
+    F_PORT=${F_PORT:-51820}
+    read -p "Foreign Server Public Key: " F_PUB
     read -p "MikroTik Public IP: " MK_IP
-    read -p "GRE Local IP (e.g. 172.16.1.1/30): " GRE_IP
-    read -p "GRE Network (e.g. 172.16.1.0/30): " GRE_NET
+    read -p "GRE Local IP (172.16.1.1/30): " GRE_IP
+    read -p "GRE Network (172.16.1.0/30): " GRE_NET
 
     cat <<EOF > /etc/amnezia/awg0.conf
 [Interface]
@@ -87,12 +99,13 @@ UnderloadPacketMagicHeader = 0x090a0b0c
 TransportPacketMagicHeader = 0x0d0e0f10
 
 [Peer]
-PublicKey = $FOREIGN_PUB_KEY
-Endpoint = $FOREIGN_IP:$FOREIGN_PORT
+PublicKey = $F_PUB
+Endpoint = $F_IP:$F_PORT
 AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 EOF
 
+    # Setup Script
     cat <<EOF > /usr/local/bin/setup-bridge.sh
 #!/bin/bash
 awg-quick up awg0 2>/dev/null
@@ -108,8 +121,9 @@ ip rule add from $GRE_NET table 100
 iptables -t nat -A POSTROUTING -o awg0 -j MASQUERADE
 iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 EOF
-
     chmod +x /usr/local/bin/setup-bridge.sh
+
+    # Service
     cat <<EOF > /etc/systemd/system/mytunnel.service
 [Unit]
 After=network.target
@@ -121,11 +135,8 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload && systemctl enable mytunnel && systemctl start mytunnel
-
-    echo -e "${GREEN}==============================================${NC}"
-    echo -e "Iran Server is UP!"
-    echo -e "Your Public Key: ${YELLOW}$PUB_KEY${NC}"
-    echo -e "${GREEN}==============================================${NC}"
-    echo -e "${BLUE}Copy this Public Key and use it when installing the Foreign Server.${NC}"
+    systemctl daemon-reload
+    systemctl enable mytunnel
+    systemctl start mytunnel
+    echo -e "${GREEN}SUCCESS: Iran Bridge is Up!${NC}"
 fi
