@@ -16,144 +16,162 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-# --- 1. Uninstall Function ---
-function uninstall_all() {
-    echo -e "${RED}[!] Cleaning up...${NC}"
+# --- Function: Generate Keys ---
+function generate_keys() {
+    echo -e "${BLUE}[+] Generating WireGuard Keys...${NC}"
+    if ! command -v wg &> /dev/null; then
+        apt update && apt install -y wireguard-tools
+    fi
+    PRIV=$(wg genkey)
+    PUB=$(echo "$PRIV" | wg pubkey)
+    echo -e "${GREEN}Your Private Key:${NC} $PRIV"
+    echo -e "${YELLOW}Your Public Key:${NC}  $PUB"
+    echo -e "${BLUE}--------------------------------------------${NC}"
+    echo -e "Copy these keys. You will need them during the installation."
+}
+
+# --- Function: Uninstall ---
+function uninstall_tunnel() {
+    echo -e "${RED}[!] Starting Uninstallation...${NC}"
     systemctl stop gost-icmp wg-quick@wg0 2>/dev/null
     systemctl disable gost-icmp wg-quick@wg0 2>/dev/null
     rm -f /etc/systemd/system/gost-icmp.service
     rm -f /etc/wireguard/wg0.conf
     rm -f /usr/local/bin/gost
-    # Re-enable system ICMP
+    # Re-enable system ICMP response
     echo 0 > /proc/sys/net/ipv4/icmp_echo_ignore_all
     systemctl daemon-reload
-    echo -e "${GREEN}[OK] All components removed.${NC}"
+    echo -e "${GREEN}[OK] Cleanup complete.${NC}"
 }
 
-# --- 2. Install Function ---
+# --- Function: Install ---
 function install_tunnel() {
     echo -e "${BLUE}[+] Installing Dependencies...${NC}"
-    apt update && apt install -y wireguard-tools wget tar iproute2
+    apt update && apt install -y wireguard-tools wget tar iproute2 net-tools
 
-    # Download GOST if not exists
     if [ ! -f "/usr/local/bin/gost" ]; then
+        echo -e "${YELLOW}[+] Downloading GOST...${NC}"
         wget -q https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz
         gunzip gost-linux-amd64-2.11.5.gz
         mv gost-linux-amd64-2.11.5 /usr/local/bin/gost
         chmod +x /usr/local/bin/gost
     fi
 
-    echo -e "\n${YELLOW}Select Role:${NC}"
-    echo "1) IRAN Server (Listener)"
-    echo "2) KHAREJ Server (Initiator)"
-    read -p "Option: " ROLE
+    echo -e "\n${BLUE}Select Server Role:${NC}"
+    echo "1) IRAN Server (Listener / Receiver)"
+    echo "2) KHAREJ Server (Initiator / Sender)"
+    read -p "Option [1-2]: " ROLE
 
-    # WireGuard Keys
-    PRIV_KEY=$(wg genkey)
-    PUB_KEY=$(echo "$PRIV_KEY" | wg pubkey)
+    echo -e "\n${YELLOW}Configuration Data Needed:${NC}"
+    read -p "Enter THIS server's Private Key: " MY_PRIV
+    read -p "Enter OPPOSITE server's Public Key: " PEER_PUB
 
     if [ "$ROLE" == "1" ]; then
-        # IRAN SIDE
-        echo -e "${YELLOW}Enter Kharej Public Key:${NC}"
-        read -p "Public Key: " PEER_PUB
-
-        # Disable system ICMP to let GOST handle it
+        # IRAN SETTINGS
+        LOCAL_IP="10.10.10.1"
+        PEER_IP="10.10.10.2"
+        # Disable OS ICMP reply to allow GOST to handle pings
         echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_all
-        echo "echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_all" >> /etc/rc.local 2>/dev/null
 
-        # GOST Systemd
         cat > /etc/systemd/system/gost-icmp.service <<EOF
 [Unit]
-Description=GOST ICMP Server
+Description=GOST ICMP Tunnel Server
 After=network.target
+
 [Service]
 ExecStart=/usr/local/bin/gost -L "icmp://:0/127.0.0.1:51820?mode=server"
 Restart=always
+User=root
+
 [Install]
 WantedBy=multi-user.target
 EOF
 
-        # WG Config
         cat > /etc/wireguard/wg0.conf <<EOF
 [Interface]
-Address = 10.10.10.1/30
+Address = ${LOCAL_IP}/30
 ListenPort = 51820
-PrivateKey = ${PRIV_KEY}
+PrivateKey = ${MY_PRIV}
 MTU = 1100
+PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+
 [Peer]
 PublicKey = ${PEER_PUB}
-AllowedIPs = 10.10.10.2/32
+AllowedIPs = ${PEER_IP}/32
 EOF
 
     else
-        # KHAREJ SIDE
-        read -p "Enter IRAN Server IP: " IRAN_IP
-        echo -e "${YELLOW}Enter Iran Public Key:${NC}"
-        read -p "Public Key: " PEER_PUB
+        # KHAREJ SETTINGS
+        read -p "Enter IRAN Server Public IP: " IRAN_IP
+        LOCAL_IP="10.10.10.2"
+        PEER_IP="10.10.10.1"
 
-        # GOST Systemd
         cat > /etc/systemd/system/gost-icmp.service <<EOF
 [Unit]
-Description=GOST ICMP Client
+Description=GOST ICMP Tunnel Client
 After=network.target
+
 [Service]
 ExecStart=/usr/local/bin/gost -L udp://:55555 -F "icmp://${IRAN_IP}:0?mode=client"
 Restart=always
+User=root
+
 [Install]
 WantedBy=multi-user.target
 EOF
 
-        # WG Config
         cat > /etc/wireguard/wg0.conf <<EOF
 [Interface]
-Address = 10.10.10.2/30
-PrivateKey = ${PRIV_KEY}
+Address = ${LOCAL_IP}/30
+PrivateKey = ${MY_PRIV}
 MTU = 1100
+PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+
 [Peer]
 PublicKey = ${PEER_PUB}
-AllowedIPs = 10.10.10.1/32
+AllowedIPs = ${PEER_IP}/32
 Endpoint = 127.0.0.1:55555
 PersistentKeepalive = 15
 EOF
     fi
 
+    echo -e "${YELLOW}[+] Starting services...${NC}"
     systemctl daemon-reload
     systemctl enable gost-icmp wg-quick@wg0
     systemctl restart gost-icmp
-    sleep 2
+    sleep 3
     systemctl restart wg-quick@wg0
 
-    echo -e "\n${GREEN}====================================${NC}"
-    echo -e "Your WireGuard IP: ${BLUE}10.10.10.${ROLE}${NC}"
-    echo -e "Your Public Key:   ${YELLOW}${PUB_KEY}${NC}"
-    echo -e "${GREEN}====================================${NC}"
-}
-
-# --- 3. Status Function ---
-function check_status() {
-    echo -e "\n${BLUE}--- GOST (ICMP) Status ---${NC}"
-    systemctl status gost-icmp --no-pager
-    echo -e "\n${BLUE}--- WireGuard Status ---${NC}"
-    wg show
-    echo -e "\n${BLUE}--- Connectivity Test ---${NC}"
-    ping -c 2 10.10.10.1 2>/dev/null || ping -c 2 10.10.10.2 2>/dev/null
+    echo -e "\n${GREEN}===============================================${NC}"
+    echo -e "  TUNNEL INSTALLED SUCCESSFULLY"
+    echo -e "  Internal IP: ${BLUE}${LOCAL_IP}${NC}"
+    echo -e "===============================================${NC}"
 }
 
 # --- Main Menu ---
 clear
-echo -e "${BLUE}=======================================${NC}"
-echo -e "${GREEN}    ICMP TUNNEL MANAGER (REVERSE)    ${NC}"
-echo -e "${BLUE}=======================================${NC}"
-echo "1. Install / Setup Tunnel"
-echo "2. Check Status"
-echo "3. Uninstall / Remove All"
-echo "4. Exit"
-read -p "Select [1-4]: " OPT
+echo -e "${BLUE}===============================================${NC}"
+echo -e "${GREEN}       ICMP TUNNEL MANAGER (ENGLISH)         ${NC}"
+echo -e "${BLUE}===============================================${NC}"
+echo "1. Generate WG Keys (Do this first on both)"
+echo "2. Install / Setup Tunnel"
+echo "3. Check Tunnel Status"
+echo "4. Uninstall / Remove Tunnel"
+echo "5. Exit"
+read -p "Select an option [1-5]: " OPT
 
 case $OPT in
-    1) install_tunnel ;;
-    2) check_status ;;
-    3) uninstall_all ;;
-    4) exit 0 ;;
+    1) generate_keys ;;
+    2) install_tunnel ;;
+    3)
+       echo -e "\n${YELLOW}--- WireGuard Status ---${NC}"
+       wg show
+       echo -e "\n${YELLOW}--- GOST Log (Last 5 lines) ---${NC}"
+       journalctl -u gost-icmp -n 5 --no-pager
+       ;;
+    4) uninstall_tunnel ;;
+    5) exit 0 ;;
     *) echo "Invalid option" ;;
 esac
