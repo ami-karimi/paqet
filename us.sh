@@ -77,7 +77,7 @@ Description=udp2raw Server
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/udp2raw -s -l0.0.0.0:${RAW_PORT} -r 127.0.0.1:51820 -k "${TUN_PASS}" --raw-mode faketcp -a --keep-alive
+ExecStart=/usr/local/bin/udp2raw -s -l0.0.0.0:${RAW_PORT} -r 127.0.0.1:51820 -k "${TUN_PASS}" --raw-mode icmp -a
 Restart=always
 User=root
 
@@ -111,7 +111,7 @@ Description=udp2raw Client
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/udp2raw -c -l127.0.0.1:51820 -r ${IRAN_IP}:${RAW_PORT} -k "${TUN_PASS}" --raw-mode faketcp -a --keep-alive
+ExecStart=/usr/local/bin/udp2raw -c -l127.0.0.1:51820 -r ${IRAN_IP}:${RAW_PORT} -k "${TUN_PASS}" --raw-mode icmp -a
 Restart=always
 User=root
 
