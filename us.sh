@@ -91,9 +91,10 @@ Address = ${LOCAL_IP}/30
 ListenPort = 51820
 PrivateKey = ${MY_PRIV}
 MTU = 1200
+Table = off
 PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
-Table = off
+
 [Peer]
 PublicKey = ${PEER_PUB}
 AllowedIPs = 0.0.0.0/0
@@ -127,7 +128,7 @@ MTU = 1200
 
 [Peer]
 PublicKey = ${PEER_PUB}
-AllowedIPs = 0.0.0.0/0
+AllowedIPs = ${PEER_IP}/30
 Endpoint = 127.0.0.1:51820
 PersistentKeepalive = 15
 EOF
