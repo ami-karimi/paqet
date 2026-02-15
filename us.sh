@@ -97,7 +97,7 @@ PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING 
 
 [Peer]
 PublicKey = ${PEER_PUB}
-AllowedIPs = 0.0.0.0/0
+AllowedIPs = ${PEER_IP}/30
 EOF
 
     else
